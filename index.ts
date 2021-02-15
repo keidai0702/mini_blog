@@ -19,7 +19,7 @@ import jwtSimple from 'jwt-simple'
   const port = process.env.NODE_ENV === 'production' ? 80 : 3000
 
   await createConnection({
-    synchronize: true,
+    
     type: 'mysql' as const,
     host: process.env.DB_HOST || 'localhost',
     port: process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : 3306,
@@ -35,6 +35,10 @@ import jwtSimple from 'jwt-simple'
 
   app.use(bodyParser.json())
   // 認証
+  // signup、login のエンドポイントでは認証要求を行わず、
+  // それ以外のエンドポイントでは Authorization ヘッダーから
+  // JWT を取り出してデコードし、セッションが有効かどうかをチェック
+  // 通過した場合は、リクエストオブジェクトに対して userId と token を組み込む
   app.use(wrap(async(req, res, next) => {
     if (/^\/api\/(signup|login)$/.test(req.path)) {
       next()
@@ -133,10 +137,13 @@ import jwtSimple from 'jwt-simple'
 
   // ログイン時にjwtを作成する
   const jwtKey = process.env.JWT_KEY || 'dummy'
-  const jwtAlgo = 'HS256'
+  // 署名に使っているアルゴリズム(alg)の情報
+  // 電子署名と改竄検知のためにHS256というアルゴリズムを使っているんだな、くらい
+  const jwtAlgo = 'HS256' //HS256(HMAC using SHA-256 hash)
 
   // 12時間以上経過しているSessionは削除して無効化する
   const revokeOldSession = async (userId: string, exp: number) => {
+    console.log("1", jwtKey);
     const threshold = new Date()
     threshold.setHours(threshold.getHours() - exp)
     const mgr = getManager()
@@ -145,7 +152,7 @@ import jwtSimple from 'jwt-simple'
 
   // トークン有効機嫌は12時間
   const makeSession = async (userId: string): Promise<string> => {
-    const exp = 12
+    const exp = 12 // expiration time 期限を示す
     const mgr = getManager()
     const result = await mgr.save(SessionEntity, {
       id: uuid(),
@@ -192,7 +199,9 @@ import jwtSimple from 'jwt-simple'
    plaintext += decipher.final('utf8')
    return plaintext
   }
-  
+  // ハッシュのストレッチング
+  // 入力値から生成したハッシュを数千回以上再度ハッシュ化
+  // することで元データの推測しにくく、総当たり攻撃をしにくくする
   const hashStretch = process.env.HASH_STRETCH ? parseInt(process.env.HASH_STRETCH, 10) : 5000
   
   const makeHash = (data: string, salt: string) => {
@@ -217,12 +226,14 @@ import jwtSimple from 'jwt-simple'
    
     const encryptedEmail = encrypt(email)
     const mgr = getManager()
+    console.log("mgr", mgr);
     const user = await mgr.findOne(UserEntity, { encryptedEmail })
     if (user) {
       res.sendStatus(409)
       return
     }
    
+    // saltとして、uuidを付与してから→ハッシュ化
     const salt = uuid()
     const result = await mgr.save(UserEntity, {
       id: uuid(),
